@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>arXivLLM - Research Assistant</title>
+    
+    <!-- Tailwind CSS for styling without external frameworks -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Marked.js for rendering Markdown in chat -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- PDF.js for rendering PDFs natively -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+
+    <style>
+        /* Custom scrollbar for an academic/clean look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8; 
+        }
+        
+        /* Markdown Chat Styles */
+        .prose pre {
+            background-color: #1e293b;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin-top: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .prose code {
+            font-family: monospace;
+            background-color: rgba(0,0,0,0.1);
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+        }
+        .prose p { margin-bottom: 0.75rem; }
+        .prose p:last-child { margin-bottom: 0; }
+        .prose ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 0.75rem; }
+        .prose ol { list-style-type: decimal; margin-left: 1.5rem; margin-bottom: 0.75rem; }
+        .prose h1, .prose h2, .prose h3 { font-weight: bold; margin-top: 1rem; margin-bottom: 0.5rem; }
+        .prose a { color: #2563eb; text-decoration: underline; }
+
+        /* Loader */
+        .typing-indicator span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #6b7280;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+            margin-right: 2px;
+        }
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col bg-white text-gray-800 font-sans overflow-hidden">
+
+    <!-- Header -->
+    <header class="h-16 border-b border-gray-200 bg-white flex items-center justify-between px-6 shrink-0 shadow-sm z-10">
+        <div class="flex items-center gap-2">
+            <i data-lucide="library" class="text-rose-800 w-7 h-7"></i>
+            <h1 class="text-2xl font-serif font-bold text-rose-800 tracking-tight">arXiv<span class="text-gray-700">LLM</span></h1>
+        </div>
+        
+        <div class="flex items-center gap-4 bg-gray-50 px-4 py-2 rounded-lg border border-gray-200">
+            <i data-lucide="key" class="w-4 h-4 text-gray-500"></i>
+            <input 
+                type="password" 
+                id="api-key-input" 
+                placeholder="Enter Gemini API Key..." 
+                class="bg-transparent border-none outline-none text-sm w-64 text-gray-700 placeholder-gray-400 focus:ring-0"
+            >
+            <div class="flex items-center gap-2 border-l pl-4 border-gray-300">
+                <span class="text-xs font-medium text-gray-500" id="status-text">Disconnected</span>
+                <div id="api-status-indicator" class="w-3 h-3 rounded-full bg-red-500 shadow-inner transition-colors duration-300"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- Left Sidebar: Document Management -->
+        <aside class="w-72 border-r border-gray-200 bg-gray-50 flex flex-col shrink-0">
+            <div class="p-4 border-b border-gray-200 bg-white">
+                <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Research Papers</h2>
+                
+                <input type="file" id="file-upload" multiple accept=".pdf" class="hidden" onchange="handleFiles(event)">
+                <button 
+                    onclick="document.getElementById('file-upload').click()"
+                    class="w-full flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 py-2.5 rounded-md font-medium text-sm transition-colors"
+                >
+                    <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+                    Upload PDFs
+                </button>
+            </div>
+            
+            <div id="document-list" class="flex-1 overflow-y-auto p-2 space-y-1">
+                <!-- Document items will be injected here -->
+                <div id="empty-docs-state" class="text-center p-6 text-gray-400">
+                    <i data-lucide="file-box" class="w-10 h-10 mx-auto mb-2 opacity-50"></i>
+                    <p class="text-sm">No papers uploaded yet.</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center: PDF Viewer -->
+        <section class="flex-1 bg-gray-200 flex flex-col relative shadow-inner overflow-hidden">
+            <div id="pdf-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                <i data-lucide="book-open" class="w-16 h-16 mb-4 opacity-30"></i>
+                <p class="text-lg font-medium text-gray-500">Select a document to read</p>
+                <p class="text-sm mt-1">Upload and select a PDF from the left panel.</p>
+            </div>
+            
+            <!-- PDF.js Canvas Container -->
+            <div id="pdf-viewer-container" class="w-full h-full hidden overflow-y-auto p-6 flex-col items-center gap-6 z-10">
+                <!-- Canvases will be injected here dynamically -->
+            </div>
+        </section>
+
+        <!-- Right Sidebar: Chatbot -->
+        <aside class="w-[400px] border-l border-gray-200 bg-white flex flex-col shrink-0 relative">
+            <div class="h-12 border-b border-gray-200 flex items-center px-4 bg-gray-50 shrink-0">
+                <h2 class="font-semibold text-gray-700 flex items-center gap-2">
+                    <i data-lucide="bot" class="w-4 h-4 text-rose-700"></i>
+                    Research Assistant
+                </h2>
+            </div>
+            
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+                <!-- Welcome Message -->
+                <div class="flex gap-3 text-sm">
+                    <div class="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                        <i data-lucide="bot" class="w-5 h-5 text-rose-700"></i>
+                    </div>
+                    <div class="bg-gray-100 text-gray-800 p-3 rounded-2xl rounded-tl-none max-w-[85%] leading-relaxed">
+                        Hello! I am arXivLLM. Upload your research papers on the left, enter your Gemini API key, and ask me anything about them!
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="p-4 border-t border-gray-200 bg-white shrink-0">
+                <div class="relative flex items-end gap-2 bg-gray-50 border border-gray-300 rounded-xl p-2 focus-within:ring-2 focus-within:ring-rose-200 focus-within:border-rose-400 transition-all">
+                    <textarea 
+                        id="chat-input" 
+                        rows="1"
+                        placeholder="Ask about the papers..." 
+                        class="flex-1 max-h-32 bg-transparent border-none outline-none resize-none text-sm p-1 placeholder-gray-400"
+                        oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 128) + 'px';"
+                        onkeydown="handleEnter(event)"
+                    ></textarea>
+                    <button 
+                        onclick="sendMessage()"
+                        class="p-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        id="send-button"
+                    >
+                        <i data-lucide="send" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <p class="text-[10px] text-center text-gray-400 mt-2">Powered by Gemini 2.5 Flash</p>
+            </div>
+        </aside>
+
+    </main>
+
+    <script>
+        // Initialize Icons
+        lucide.createIcons();
+
+        // --- Application State ---
+        let apiKey = '';
+        let uploadedDocs = []; // Array of { id, name, url, base64 }
+        let activeDocId = null;
+        
+        let chatHistory = []; // Conversation context for API
+        let sentDocIds = new Set(); // Tracks which PDFs have been sent to the context
+
+        // --- DOM Elements ---
+        const apiKeyInput = document.getElementById('api-key-input');
+        const apiStatusIndicator = document.getElementById('api-status-indicator');
+        const statusText = document.getElementById('status-text');
+        const fileUpload = document.getElementById('file-upload');
+        const documentList = document.getElementById('document-list');
+        const emptyDocsState = document.getElementById('empty-docs-state');
+        const pdfViewerContainer = document.getElementById('pdf-viewer-container');
+        const pdfPlaceholder = document.getElementById('pdf-placeholder');
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendButton = document.getElementById('send-button');
+
+        // --- API Key Logic ---
+        apiKeyInput.addEventListener('input', (e) => {
+            apiKey = e.target.value.trim();
+            if (apiKey.length > 20) {
+                apiStatusIndicator.classList.remove('bg-red-500');
+                apiStatusIndicator.classList.add('bg-green-500');
+                statusText.innerText = "Connected";
+                statusText.classList.add('text-green-600');
+            } else {
+                apiStatusIndicator.classList.remove('bg-green-500');
+                apiStatusIndicator.classList.add('bg-red-500');
+                statusText.innerText = "Disconnected";
+                statusText.classList.remove('text-green-600');
+            }
+        });
+
+        // --- File Handling ---
+        async function handleFiles(event) {
+            const files = event.target.files;
+            if (!files.length) return;
+
+            for (let file of files) {
+                if (file.type !== 'application/pdf') {
+                    showSystemMessage(`Skipped ${file.name} - Not a PDF file.`);
+                    continue;
+                }
+
+                // Convert to base64
+                try {
+                    const base64Data = await readAsBase64(file);
+                    const newDoc = {
+                        id: 'doc_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                        name: file.name,
+                        url: URL.createObjectURL(file),
+                        base64: base64Data.split(',')[1] // Strip data URL prefix
+                    };
+                    
+                    uploadedDocs.push(newDoc);
+                } catch (error) {
+                    showSystemMessage(`Failed to read ${file.name}.`);
+                }
+            }
+            
+            renderDocumentList();
+            
+            // Auto-select first doc if none selected
+            if (uploadedDocs.length > 0 && !activeDocId) {
+                selectDocument(uploadedDocs[0].id);
+            }
+            
+            // Reset input so the same file can be uploaded again if deleted (optional)
+            event.target.value = '';
+        }
+
+        function readAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function renderDocumentList() {
+            if (uploadedDocs.length === 0) {
+                emptyDocsState.style.display = 'block';
+                documentList.innerHTML = '';
+                documentList.appendChild(emptyDocsState);
+                return;
+            }
+
+            emptyDocsState.style.display = 'none';
+            documentList.innerHTML = '';
+
+            uploadedDocs.forEach(doc => {
+                const isActive = doc.id === activeDocId;
+                const docEl = document.createElement('div');
+                docEl.className = `cursor-pointer p-3 rounded-md flex items-start gap-3 transition-colors ${
+                    isActive ? 'bg-white border border-rose-200 shadow-sm' : 'hover:bg-gray-100 border border-transparent'
+                }`;
+                docEl.onclick = () => selectDocument(doc.id);
+
+                docEl.innerHTML = `
+                    <i data-lucide="file-text" class="w-5 h-5 shrink-0 ${isActive ? 'text-rose-600' : 'text-gray-400'} mt-0.5"></i>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium truncate ${isActive ? 'text-gray-900' : 'text-gray-600'}">${doc.name}</p>
+                        <p class="text-xs text-gray-400 mt-0.5">${sentDocIds.has(doc.id) ? 'Context Loaded' : 'Pending Context'}</p>
+                    </div>
+                `;
+                documentList.appendChild(docEl);
+            });
+            lucide.createIcons();
+        }
+
+        function selectDocument(id) {
+            activeDocId = id;
+            const doc = uploadedDocs.find(d => d.id === id);
+            
+            if (doc) {
+                pdfPlaceholder.style.display = 'none';
+                pdfViewerContainer.style.display = 'flex';
+                renderPDF(doc.base64);
+            }
+            
+            renderDocumentList();
+        }
+
+        async function renderPDF(base64Data) {
+            // Show loading state
+            pdfViewerContainer.innerHTML = '<div class="text-gray-500 mt-10 flex flex-col items-center"><i data-lucide="loader-2" class="w-8 h-8 animate-spin mb-2 text-rose-500"></i>Rendering PDF...</div>';
+            lucide.createIcons();
+            
+            try {
+                // Convert Base64 to Uint8Array for PDF.js
+                const raw = atob(base64Data);
+                const uint8Array = new Uint8Array(raw.length);
+                for (let i = 0; i < raw.length; i++) {
+                    uint8Array[i] = raw.charCodeAt(i);
+                }
+
+                // Load the document
+                const loadingTask = pdfjsLib.getDocument({data: uint8Array});
+                const pdf = await loadingTask.promise;
+                
+                pdfViewerContainer.innerHTML = ''; // Clear loading text
+                
+                // Render each page
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({scale: 1.5}); // 1.5x scale for better readability
+
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    canvas.className = 'shadow-lg bg-white max-w-full h-auto rounded-sm shrink-0';
+
+                    pdfViewerContainer.appendChild(canvas);
+
+                    const renderContext = {
+                        canvasContext: context,
+                        viewport: viewport
+                    };
+                    await page.render(renderContext).promise;
+                }
+            } catch (error) {
+                console.error("Error rendering PDF:", error);
+                pdfViewerContainer.innerHTML = '<div class="text-red-500 mt-10 flex flex-col items-center"><i data-lucide="alert-circle" class="w-8 h-8 mb-2"></i>Error rendering PDF.</div>';
+                lucide.createIcons();
+            }
+        }
+
+        // --- Chat Logic ---
+        function handleEnter(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        async function sendMessage() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+
+            if (!apiKey || apiKey.length < 10) {
+                showSystemMessage("Please enter a valid Gemini API key in the top right corner.");
+                return;
+            }
+
+            // UI Update: User Message
+            chatInput.value = '';
+            chatInput.style.height = '';
+            appendMessage('user', text);
+            
+            // Build the next API turn
+            const currentParts = [];
+
+            // Inject any new PDFs into the context of THIS message
+            let addedNewDocs = false;
+            uploadedDocs.forEach(doc => {
+                if (!sentDocIds.has(doc.id)) {
+                    currentParts.push({
+                        inlineData: {
+                            mimeType: "application/pdf",
+                            data: doc.base64
+                        }
+                    });
+                    sentDocIds.add(doc.id);
+                    addedNewDocs = true;
+                }
+            });
+
+            // Append the actual text query
+            currentParts.push({ text: text });
+            
+            // Add to local history
+            chatHistory.push({ role: "user", parts: currentParts });
+
+            if (addedNewDocs) {
+                renderDocumentList(); // Update status labels
+            }
+
+            // Show Loading
+            const loadingId = appendLoading();
+            sendButton.disabled = true;
+
+            try {
+                // Call Gemini API
+                const responseText = await callGeminiAPI(chatHistory);
+                
+                // Remove Loading
+                removeMessage(loadingId);
+                
+                // Add AI response to UI and history
+                appendMessage('model', responseText);
+                chatHistory.push({ role: "model", parts: [{ text: responseText }] });
+
+            } catch (error) {
+                removeMessage(loadingId);
+                // On failure, remove the failed user message from history so they can try again
+                chatHistory.pop(); 
+                showSystemMessage(`Error: ${error.message}`);
+                
+                // Check if it's an auth error to visually update the key status
+                if(error.message.includes("400") || error.message.includes("403")) {
+                     apiStatusIndicator.classList.remove('bg-green-500');
+                     apiStatusIndicator.classList.add('bg-red-500');
+                     statusText.innerText = "Auth Failed";
+                     statusText.classList.remove('text-green-600');
+                     statusText.classList.add('text-red-500');
+                }
+            } finally {
+                sendButton.disabled = false;
+                chatInput.focus();
+            }
+        }
+
+        // --- API Integration (with backoff) ---
+        async function callGeminiAPI(history) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: history,
+                systemInstruction: {
+                    parts: [{
+                        text: "You are arXivLLM, an expert academic research assistant. You answer questions based heavily on the uploaded PDF research papers. Use formatting (markdown, lists, bold) to make your responses readable. Be precise and analytical."
+                    }]
+                }
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            return await fetchWithRetry(url, options);
+        }
+
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            let delays = [1000, 2000, 4000, 8000, 16000];
+            
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error?.message || `HTTP ${response.status}`);
+                    }
+                    
+                    // Extract text content from valid response
+                    return data.candidates[0].content.parts[0].text;
+                    
+                } catch (error) {
+                    if (i === maxRetries - 1) {
+                        throw error; // Throw on final failure
+                    }
+                    // Wait before retrying
+                    await new Promise(resolve => setTimeout(resolve, delays[i]));
+                }
+            }
+        }
+
+        // --- UI Utilities ---
+        function appendMessage(role, text) {
+            const id = 'msg_' + Date.now();
+            const wrapper = document.createElement('div');
+            wrapper.id = id;
+            wrapper.className = `flex gap-3 text-sm ${role === 'user' ? 'flex-row-reverse' : ''}`;
+            
+            const iconHTML = role === 'user' 
+                ? `<div class="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center shrink-0"><i data-lucide="user" class="w-4 h-4 text-white"></i></div>`
+                : `<div class="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center shrink-0"><i data-lucide="bot" class="w-5 h-5 text-rose-700"></i></div>`;
+            
+            // Parse Markdown if it's the model, else pure text
+            const contentHTML = role === 'model' ? marked.parse(text) : escapeHTML(text);
+            
+            const bubbleClasses = role === 'user'
+                ? 'bg-rose-700 text-white p-3 rounded-2xl rounded-tr-none max-w-[85%] leading-relaxed'
+                : 'bg-gray-100 text-gray-800 p-4 rounded-2xl rounded-tl-none max-w-[85%] leading-relaxed prose prose-sm prose-rose';
+
+            wrapper.innerHTML = `
+                ${iconHTML}
+                <div class="${bubbleClasses}">${contentHTML}</div>
+            `;
+            
+            chatMessages.appendChild(wrapper);
+            lucide.createIcons();
+            scrollToBottom();
+            return id;
+        }
+
+        function appendLoading() {
+            const id = 'loading_' + Date.now();
+            const wrapper = document.createElement('div');
+            wrapper.id = id;
+            wrapper.className = `flex gap-3 text-sm`;
+            wrapper.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                    <i data-lucide="bot" class="w-5 h-5 text-rose-700"></i>
+                </div>
+                <div class="bg-gray-100 text-gray-800 p-4 rounded-2xl rounded-tl-none flex items-center justify-center typing-indicator">
+                    <span></span><span></span><span></span>
+                </div>
+            `;
+            chatMessages.appendChild(wrapper);
+            lucide.createIcons();
+            scrollToBottom();
+            return id;
+        }
+
+        function removeMessage(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        function showSystemMessage(text) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex justify-center text-xs text-rose-600 font-medium my-2';
+            wrapper.innerHTML = `<span class="bg-rose-50 px-3 py-1 rounded-full border border-rose-100">${escapeHTML(text)}</span>`;
+            chatMessages.appendChild(wrapper);
+            scrollToBottom();
+        }
+
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag])
+            );
+        }
+
+    </script>
+</body>
+</html>
